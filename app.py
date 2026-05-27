@@ -15,6 +15,7 @@ import traceback
 from datetime import date, timedelta
 
 import pandas as pd
+import requests
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from openpyxl import load_workbook
@@ -29,6 +30,22 @@ SITE_LABEL    = {'新宿SC': '新宿SC', '在宅G': 'リモートSC', 'AI': 'AI'
 B_TO_D        = {'B0000106': 'D0000295', 'B0000107': 'D0000326'}
 KONO          = '幸野有希子CRM'
 EXCLUDE_OPS   = ['堀川璃歩']
+
+# GitHubからスタッフマスターを自動読み込み
+MASTER_URL = 'https://raw.githubusercontent.com/minakawa-star/digross-server/main/%E3%82%B9%E3%82%BF%E3%83%83%E3%83%95%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC.xlsx'
+_master_cache = None
+
+def get_master_from_github():
+    global _master_cache
+    try:
+        res = requests.get(MASTER_URL, timeout=30)
+        res.raise_for_status()
+        _master_cache = res.content
+        return res.content
+    except Exception as e:
+        if _master_cache:
+            return _master_cache
+        raise ValueError(f'スタッフマスターの取得に失敗しました: {e}')
 
 
 # ============================================================
@@ -52,15 +69,16 @@ def update():
             return jsonify({'error': '生産性レポートが見つかりません'}), 400
         if 'work' not in request.files:
             return jsonify({'error': '勤務データが見つかりません'}), 400
-        if 'master' not in request.files:
-            return jsonify({'error': 'スタッフマスターが見つかりません'}), 400
+        # スタッフマスター：アップロードされていればそちらを優先、なければGitHubから取得
         if 'prev' not in request.files:
             return jsonify({'error': '前回のpt_data.jsonが見つかりません'}), 400
 
         apo_file    = request.files['apo'].read()
         prod_file   = request.files['prod'].read()
         work_file   = request.files['work'].read()
-        master_file = request.files['master'].read()
+        master_file = (request.files['master'].read()
+                       if 'master' in request.files
+                       else get_master_from_github())
         prev_json   = json.loads(request.files['prev'].read().decode('utf-8'))
         inc_map     = prev_json.get('incentive', {})
 
