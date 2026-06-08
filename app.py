@@ -367,6 +367,74 @@ def update():
         operators = _ops_for_unit
 
         # ============================================================
+        # 日次×個人成果（日次明細モーダル用）
+        # 各営業日ごとのスタッフ別アポ・売上・原価率を集計
+        # ============================================================
+        kono_f = (df_apo['スタッフ名'] != KONO) if kono_excluded else pd.Series([True]*len(df_apo), index=df_apo.index)
+        # 日次人件費（1日あたり）
+        daily_labor_per_day = round(sites['all']['labor'] / elapsed) if elapsed > 0 else 0
+
+        daily_ops_by_date = {}
+        for date_str in biz_dates:
+            # 当日取得アポ
+            df_d_get = df_apo[(df_apo['取得日'] == date_str) & kono_f].copy()
+            # 当日キャンセル
+            df_d_cxl = df_apo[(df_apo['cancel_date_str'] == date_str) & kono_f].copy()
+
+            # スタッフ別集計
+            g_apo = df_d_get.groupby('スタッフ名').agg(
+                apo=('アポイントID','count'), sg=('sales','sum')).reset_index()
+            g_cxl = df_d_cxl.groupby('スタッフ名').agg(
+                cxl=('アポイントID','count'), sc=('sales','sum')).reset_index()
+            g = g_apo.merge(g_cxl, on='スタッフ名', how='outer').fillna(0)
+            g['valid'] = (g['apo'] - g['cxl']).astype(int)
+            g['net']   = (g['sg']  - g['sc']).astype(int)
+
+            # 案件別内訳（スタッフ×案件）
+            proj_by_staff = df_d_get.groupby(['スタッフ名','登録案件名']).agg(
+                p_apo=('アポイントID','count'), p_sales=('sales','sum')).reset_index()
+            proj_cxl_by_staff = df_d_cxl.groupby(['スタッフ名','登録案件名']).agg(
+                p_cxl=('アポイントID','count'), p_sc=('sales','sum')).reset_index()
+            proj_m = proj_by_staff.merge(proj_cxl_by_staff, on=['スタッフ名','登録案件名'], how='left').fillna(0)
+            proj_m['p_valid'] = (proj_m['p_apo'] - proj_m['p_cxl']).astype(int)
+
+            # スタッフごとのlabor（月次人件費÷経過日数）
+            labor_map = {op['name']: round((op.get('labor',0) or 0) / elapsed) if elapsed > 0 else 0
+                         for op in operators}
+
+            staff_list = []
+            for _, row in g.iterrows():
+                name = str(row['スタッフ名'])
+                net  = int(row['net'])
+                labor_d = labor_map.get(name, 0)
+                cost_r  = round(labor_d / net * 100, 1) if net > 0 and labor_d > 0 else None
+                # 当日の案件内訳（有効アポ>0のみ・有効数順）
+                projs = proj_m[proj_m['スタッフ名'] == name].copy()
+                proj_list = [
+                    {'name': str(r['登録案件名']),
+                     'valid': int(r['p_valid']),
+                     'sales': int(r['p_sales'] - r['p_sc'])}
+                    for _, r in projs.iterrows() if int(r['p_valid']) > 0
+                ]
+                proj_list.sort(key=lambda x: -x['valid'])
+                staff_list.append({
+                    'name':     name,
+                    'sales':    net,
+                    'valid':    int(row['valid']),
+                    'costRate': cost_r,
+                    'projects': proj_list
+                })
+
+            # 当日売上の高い順にソート
+            staff_list.sort(key=lambda x: (-x['sales'], -x['valid']))
+            daily_ops_by_date[date_str] = staff_list
+
+        # daily['all']の各行にdaily_opsを付与
+        for i, row in enumerate(daily['all']):
+            date_str = row['date']
+            row['daily_ops'] = daily_ops_by_date.get(date_str, [])
+
+        # ============================================================
         # 【修正】enrollCount・activeCount を計算
         # ============================================================
         # ============================================================
