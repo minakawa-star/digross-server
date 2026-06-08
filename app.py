@@ -303,6 +303,14 @@ def update():
                 inc_site[site] += round(inc_total / working * elapsed)
         inc_all = sum(inc_site.values())
 
+        # ============================================================
+        # unit計算用にoperatorsを事前に1回だけ計算（ループ内で毎回呼ぶとタイムアウト）
+        # ============================================================
+        _ops_for_unit = _calc_operators(
+            df_apo, biz_dates, df_master, df_prod,
+            work_by_id, labor_by_id, days_by_id, id_map, site_map, rank_map,
+            inc_map, elapsed, working, kono_excluded, site_label)
+
         sites = {}
         for k in ['all', 'shinjuku', 'remote', 'ai']:
             rows   = daily[k]
@@ -325,10 +333,8 @@ def update():
             cost   = round(labor / sales * 100, 1) if sales > 0 else 0
             ar     = round(apo / calls * 100, 2)   if calls > 0 else 0
             last   = rows[-1] if rows else {}
-            all_ops = [op for op in _calc_operators(
-                df_apo, biz_dates, df_master, df_prod,
-                work_by_id, labor_by_id, days_by_id, id_map, site_map, rank_map,
-                inc_map, elapsed, working, kono_excluded, site_label)
+            # 事前計算済みのoperatorsから稼働単価を算出
+            all_ops = [op for op in _ops_for_unit
                 if (k == 'all' or op['site'] == site_jp)
                 and op['sales'] > 0 and op.get('days', 0) > 0]
             ts = sum(o['sales'] for o in all_ops)
@@ -357,13 +363,8 @@ def update():
         # ============================================================
         heatmap = _calc_heatmap(df_apo, biz_dates, sites['all']['sales'], kono_excluded)
 
-        # ============================================================
-        # OP個人実績
-        # ============================================================
-        operators = _calc_operators(
-            df_apo, biz_dates, df_master, df_prod,
-            work_by_id, labor_by_id, days_by_id, id_map, site_map, rank_map,
-            inc_map, elapsed, working, kono_excluded, site_label)
+        # operatorsは既にunit計算で使用した_ops_for_unitを流用（重複計算を避ける）
+        operators = _ops_for_unit
 
         # ============================================================
         # 【修正】enrollCount・activeCount を計算
