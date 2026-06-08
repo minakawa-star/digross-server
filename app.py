@@ -371,10 +371,13 @@ def update():
         # アクティブ = 在籍スタッフ かつ 当月生産性レポートに名前がある
         # ============================================================
         master_names = set(df_master['スタッフ名'].tolist())
+        # 6月以降（kono_excluded=False）はAIサイトも除外
+        ai_excluded = not kono_excluded
         enroll_ops = [op for op in operators
                       if op['name'].strip() not in EXCLUDE_ENROLL
                       and op['rank'] in VALID_RANKS
-                      and op['name'] in master_names]
+                      and op['name'] in master_names
+                      and not (ai_excluded and op.get('site') == 'AI')]
         enroll_count = len(enroll_ops)
 
         # 生産性レポートに登場するスタッフ名のセット
