@@ -990,3 +990,5 @@ def _calc_operators(df_apo, biz_dates, df_master, df_prod,
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+from app_staff import register_staff_routes
+register_staff_routes(app)
