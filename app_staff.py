@@ -5,6 +5,7 @@ import datetime
 import pandas as pd
 from flask import jsonify, request
 from supabase import create_client
+from flask_cors import CORS
 
 SUPABASE_STAFF_URL = os.environ.get("SUPABASE_STAFF_URL")
 SUPABASE_STAFF_KEY = os.environ.get("SUPABASE_STAFF_KEY")
@@ -13,6 +14,13 @@ JWT_SECRET = os.environ.get("JWT_SECRET")
 supabase_staff = create_client(SUPABASE_STAFF_URL, SUPABASE_STAFF_KEY)
 
 def register_staff_routes(app):
+    CORS(app, resources={
+        r"/staff/*": {"origins": [
+            "https://minakawa-star.github.io",
+            "http://localhost:3000"
+        ]},
+        r"/health_staff": {"origins": "*"}
+    })
 
     @app.route("/health_staff")
     def health_staff():
@@ -26,8 +34,6 @@ def register_staff_routes(app):
                 return jsonify({"error": "ファイルがありません"}), 400
 
             df = pd.read_excel(io.BytesIO(file.read()))
-
-            # 列名の空白除去
             df.columns = df.columns.str.strip()
 
             records = []
@@ -42,7 +48,6 @@ def register_staff_routes(app):
                 amount = row.get("案件金額", 0)
                 fb_amount = row.get("達成金額", 0)
 
-                # target_month：取得日ベース
                 if pd.notna(acquired_date):
                     target_month = pd.to_datetime(acquired_date).strftime("%Y-%m-01")
                 else:
@@ -124,7 +129,6 @@ def register_staff_routes(app):
                 work_date = row.get("*年月日")
                 work_time = str(row.get("実労働時間", "00:00")).strip()
 
-                # 時間変換 HH:MM → 小数
                 try:
                     h, m = work_time.split(":")
                     work_hours = int(h) + int(m) / 60
