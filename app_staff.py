@@ -226,7 +226,9 @@ def register_staff_routes(app):
                     "target_achieve": 0,
                     "target_maintain": 0,
                     "achieve_rate": None,
-                    "is_monthly": info["monthly_salary"] is not None
+                    "is_monthly": info["monthly_salary"] is not None,
+                    "hourly_wage": info["hourly_wage"],
+                    "monthly_salary": info["monthly_salary"]
                 }
             for row in apo_rows:
                 sid = B_TO_D.get(row["staff_id"], row["staff_id"])
