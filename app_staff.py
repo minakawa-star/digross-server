@@ -27,7 +27,7 @@ def register_staff_routes(app):
                 return jsonify({"error": "データがありません"}), 400
             for r in records:
                 r["target_month"] = r["acquired_date"][:7] + "-01" if r.get("acquired_date") else None
-            supabase_staff.table("appointments").upsert(records).execute()
+            supabase_staff.table("appointments").upsert(records, on_conflict="staff_id,acquired_date,amount,cancel_date").execute()
             return jsonify({"status": "ok", "count": len(records)})
         except Exception as e:
             import traceback
