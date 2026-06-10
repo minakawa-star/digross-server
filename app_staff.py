@@ -117,23 +117,6 @@ def register_staff_routes(app):
     def health_staff():
         return jsonify({"status": "ok", "service": "staff-dashboard"})
 
-    @app.route("/staff/init_admin")
-    def init_admin():
-        try:
-            password = "Dghojin2026"
-            password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-            supabase_staff.table("staff_master").upsert({
-                "staff_id": "ADMIN001",
-                "staff_name": "管理者",
-                "login_id": "admin",
-                "password_hash": password_hash,
-                "role": "admin"
-            }).execute()
-            return jsonify({"status": "ok", "message": "管理者アカウントを作成しました"})
-        except Exception as e:
-            import traceback
-            return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
-
     @app.route("/staff/login", methods=["POST"])
     def staff_login():
         try:
