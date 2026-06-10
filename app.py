@@ -495,24 +495,51 @@ def update():
         # アクティブ = 在籍スタッフ かつ 当月生産性レポートに名前がある
         # ============================================================
         master_names = set(df_master['スタッフ名'].tolist())
-        # 6月以降（kono_excluded=False）はAIサイトも除外
         ai_excluded = not kono_excluded
-        enroll_ops = [op for op in operators
-                      if op['name'].strip() not in EXCLUDE_ENROLL
-                      and op['rank'] in VALID_RANKS
-                      and op['name'] in master_names
-                      and not (ai_excluded and op.get('site') == 'AI')]
+
+        # サイト別在籍・アクティブ集計
+        site_labels_list = [shinjuku_label, 'リモートSC', 'AI']
+        enroll_by_site = {s: 0 for s in site_labels_list}
+        active_by_site = {s: 0 for s in site_labels_list}
+
+        enroll_ops = []
+        for op in operators:
+            if op['name'].strip() in EXCLUDE_ENROLL: continue
+            if op['rank'] not in VALID_RANKS: continue
+            if op['name'] not in master_names: continue
+            if ai_excluded and op.get('site') == 'AI': continue
+            enroll_ops.append(op)
+            s = op.get('site', '')
+            if s in enroll_by_site:
+                enroll_by_site[s] += 1
+
         enroll_count = len(enroll_ops)
 
-        # 生産性レポートに登場するスタッフ名のセット
         if agent_col:
             prod_names = set(df_prod[agent_col].astype(str).str.strip().tolist())
         else:
             prod_names = set()
-        active_count = sum(
-            1 for op in enroll_ops
-            if op['name'] in prod_names
-        )
+
+        active_count = 0
+        for op in enroll_ops:
+            is_active = op['name'] in prod_names
+            if is_active:
+                active_count += 1
+                s = op.get('site', '')
+                if s in active_by_site:
+                    active_by_site[s] += 1
+
+        # サイト別chart dataを生成
+        chart_by_site = {}
+        for k in ['all', 'shinjuku', 'remote', 'ai']:
+            site_jp = {'all': None, 'shinjuku': shinjuku_label, 'remote': 'リモートSC', 'ai': 'AI'}[k]
+            c_data = [0.0] * len(chart_labels)
+            for row in daily[k]:
+                d_label = row['date'].replace(f'{target_year}/', '').replace('/0', '/').lstrip('0')
+                if d_label in chart_labels:
+                    idx = chart_labels.index(d_label)
+                    c_data[idx] = round(row['sales'] / 10000, 1)
+            chart_by_site[k] = c_data
 
         # ============================================================
         # PT_DATA組み立て
@@ -529,14 +556,20 @@ def update():
                 'elapsedDays':     elapsed,
                 'workingDays':     working,
                 'alertText':       f"{last_date}のデータを反映済みです（累計{elapsed}営業日）。最終更新: {today}",
-                'enrollCount':     enroll_count,   # 【追加】在籍数
-                'activeCount':     active_count,   # 【追加】稼働数
-                'workPeriodWarning': work_period_warning,  # jinjer期間ズレ警告
+                'enrollCount':     enroll_count,
+                'activeCount':     active_count,
+                'enrollBySite':    enroll_by_site,   # サイト別在籍数
+                'activeBySite':    active_by_site,   # サイト別アクティブ数
+                'workPeriodWarning': work_period_warning,
             },
             'targets':   targets,
             'sites':     sites,
             'daily':     daily,
-            'chart':     {'labels': chart_labels, 'data': chart_data},
+            'chart':     {
+                'labels': chart_labels,
+                'data':   chart_data,          # 全体（後方互換）
+                'bySite': chart_by_site,       # サイト別
+            },
             'heatmap':   heatmap,
             'operators': operators,
             'incentive': inc_map,
