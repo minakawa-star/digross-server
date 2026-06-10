@@ -30,7 +30,8 @@ def register_staff_routes(app):
             supabase_staff.table("appointments").upsert(records).execute()
             return jsonify({"status": "ok", "count": len(records)})
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            import traceback
+            return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
     @app.route("/staff/upload/productivity_json", methods=["POST"])
     def upload_productivity_json():
@@ -44,7 +45,8 @@ def register_staff_routes(app):
             supabase_staff.table("productivity").upsert(records).execute()
             return jsonify({"status": "ok", "count": len(records)})
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            import traceback
+            return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
     @app.route("/staff/upload/attendance_json", methods=["POST"])
     def upload_attendance_json():
@@ -58,4 +60,5 @@ def register_staff_routes(app):
             supabase_staff.table("attendance").upsert(records).execute()
             return jsonify({"status": "ok", "count": len(records)})
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            import traceback
+            return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
