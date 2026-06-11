@@ -446,9 +446,46 @@ def update():
                     total += round(float(wage) * h)
             return total if total > 0 else daily_labor_per_day_default
 
-        # daily['all']の各行にdaily_laborを付与
-        for row in daily['all']:
-            row['daily_labor'] = _daily_total_labor(row['date'])
+        def _daily_total_labor(date_str, site_raw_filter=None):
+            """当日の人件費合計。site_raw_filterでサイト絞り込み可能。"""
+            if df_work_daily is None:
+                # 均等割りフォールバック
+                if site_raw_filter is None:
+                    return daily_labor_per_day_default
+                site_labor_val = site_labor.get(site_label.get(site_raw_filter, ''), 0)
+                return round(site_labor_val / elapsed) if elapsed > 0 else 0
+            mask = df_work_daily['年月日'] == date_str
+            rows_d = df_work_daily[mask]
+            total = 0
+            for _, wr in rows_d.iterrows():
+                emp_id = str(wr['従業員ID'])
+                lookup = B_TO_D.get(emp_id, emp_id)
+                h = float(wr['実労働h'])
+                if h <= 0: continue
+                # サイトフィルタ
+                if site_raw_filter is not None:
+                    staff_site = id_site_map.get(lookup) or id_site_map.get(emp_id, '')
+                    if staff_site != site_raw_filter:
+                        continue
+                wage = wage_by_id_d.get(lookup) or wage_by_id_d.get(emp_id, 0)
+                note = str(note_by_id_d.get(lookup) or note_by_id_d.get(emp_id, ''))
+                if not wage: continue
+                if '月給' in note:
+                    total += round(float(wage) * 1.15 / working)
+                else:
+                    total += round(float(wage) * h)
+            if total <= 0:
+                if site_raw_filter is None:
+                    return daily_labor_per_day_default
+                site_labor_val = site_labor.get(site_label.get(site_raw_filter, ''), 0)
+                return round(site_labor_val / elapsed) if elapsed > 0 else 0
+            return total
+
+        # daily各サイトの各行にdaily_laborを付与
+        site_raw_map = {'all': None, 'shinjuku': '新宿SC', 'remote': '在宅G', 'ai': 'AI'}
+        for site_key_d, raw in site_raw_map.items():
+            for row in daily[site_key_d]:
+                row['daily_labor'] = _daily_total_labor(row['date'], raw)
 
         daily_ops_by_date = {}
         for date_str in biz_dates:
