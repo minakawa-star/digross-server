@@ -376,7 +376,7 @@ def register_staff_routes(app):
                     r["target_achieve"] = int(base / 0.40)
                     r["target_maintain"] = int(base / 0.45)
                     if r["work_days"] == 0:
-                        r["work_days"] = 22
+                        r["work_days"] = calc_days if calc_days > 0 else 22
                 else:
                     wage = info["hourly_wage"]
                     mgmt = info["mgmt_fee"]
