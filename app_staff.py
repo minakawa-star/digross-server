@@ -111,6 +111,65 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
+
+def calc_campaign_fb(apo_rows, campaigns):
+    """
+    FBキャンペーンの集計。
+    戻り値:
+      breakdown: { staff_id: [ {name, category, amount, count?}, ... ] }
+      totals:    { staff_id: 合計金額 }
+    """
+    breakdown = {}
+    totals = {}
+
+    for c in campaigns:
+        target_types = c.get("target_types") or []
+        exclude_resend = c.get("exclude_resend", True)
+        target_staff_ids = c.get("target_staff_ids") or []
+        start = c.get("start_date")
+        end = c.get("end_date")
+        calc_type = c.get("calc_type")
+        amount = c.get("amount", 0)
+
+        if calc_type == "fixed":
+            for sid in target_staff_ids:
+                sid_m = B_TO_D.get(sid, sid)
+                breakdown.setdefault(sid_m, []).append({
+                    "name": c.get("name"),
+                    "category": c.get("category"),
+                    "amount": amount
+                })
+                totals[sid_m] = totals.get(sid_m, 0) + amount
+        else:  # per_unit
+            counts = {}
+            for row in apo_rows:
+                acq = row.get("acquired_date")
+                if not acq or not start or not end:
+                    continue
+                if not (start <= acq <= end):
+                    continue
+                if target_types and row.get("apo_type") not in target_types:
+                    continue
+                if exclude_resend and row.get("resend_status") == "再送":
+                    continue
+                sid = B_TO_D.get(row["staff_id"], row["staff_id"])
+                if target_staff_ids and sid not in target_staff_ids:
+                    continue
+                counts[sid] = counts.get(sid, 0) + 1
+
+            for sid, cnt in counts.items():
+                amt = cnt * amount
+                breakdown.setdefault(sid, []).append({
+                    "name": c.get("name"),
+                    "category": c.get("category"),
+                    "amount": amt,
+                    "count": cnt
+                })
+                totals[sid] = totals.get(sid, 0) + amt
+
+    return breakdown, totals
+
+
 def register_staff_routes(app):
 
     @app.route("/health_staff")
@@ -292,6 +351,79 @@ def register_staff_routes(app):
             import traceback
             return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+    # ============================================================
+    # FBキャンペーン管理
+    # ============================================================
+    @app.route("/staff/fb_campaigns", methods=["GET", "POST"])
+    @admin_required
+    def fb_campaigns():
+        if request.method == "GET":
+            try:
+                res = supabase_staff.table("fb_campaigns").select("*").order("start_date", desc=True).execute()
+                return jsonify({"status": "ok", "data": res.data})
+            except Exception as e:
+                import traceback
+                return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+        else:
+            try:
+                data = request.get_json()
+                required = ["name", "category", "calc_type", "start_date", "end_date", "amount"]
+                for f in required:
+                    if data.get(f) is None or data.get(f) == "":
+                        return jsonify({"error": f"{f}は必須です"}), 400
+
+                record = {
+                    "name": data["name"],
+                    "category": data["category"],
+                    "calc_type": data["calc_type"],
+                    "start_date": data["start_date"],
+                    "end_date": data["end_date"],
+                    "amount": int(data["amount"]),
+                    "target_types": data.get("target_types") or [],
+                    "exclude_resend": data.get("exclude_resend", True),
+                    "target_staff_ids": data.get("target_staff_ids") or []
+                }
+                res = supabase_staff.table("fb_campaigns").insert(record).execute()
+                return jsonify({"status": "ok", "data": res.data[0]})
+            except Exception as e:
+                import traceback
+                return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+    @app.route("/staff/fb_campaigns/<int:campaign_id>", methods=["PUT", "DELETE"])
+    @admin_required
+    def fb_campaign_detail(campaign_id):
+        if request.method == "DELETE":
+            try:
+                supabase_staff.table("fb_campaigns").delete().eq("id", campaign_id).execute()
+                return jsonify({"status": "ok"})
+            except Exception as e:
+                import traceback
+                return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+        else:
+            try:
+                data = request.get_json()
+                required = ["name", "category", "calc_type", "start_date", "end_date", "amount"]
+                for f in required:
+                    if data.get(f) is None or data.get(f) == "":
+                        return jsonify({"error": f"{f}は必須です"}), 400
+
+                record = {
+                    "name": data["name"],
+                    "category": data["category"],
+                    "calc_type": data["calc_type"],
+                    "start_date": data["start_date"],
+                    "end_date": data["end_date"],
+                    "amount": int(data["amount"]),
+                    "target_types": data.get("target_types") or [],
+                    "exclude_resend": data.get("exclude_resend", True),
+                    "target_staff_ids": data.get("target_staff_ids") or []
+                }
+                supabase_staff.table("fb_campaigns").update(record).eq("id", campaign_id).execute()
+                return jsonify({"status": "ok"})
+            except Exception as e:
+                import traceback
+                return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
     @app.route("/staff/summary")
     def staff_summary():
         try:
@@ -310,10 +442,12 @@ def register_staff_routes(app):
                 .select("*").eq("target_month", target_month).execute()
             att_rows = att_res.data
 
-            # 出勤予定/確定データ取得
             targets_res = supabase_staff.table("monthly_targets")\
                 .select("*").eq("target_month", target_month).execute()
             targets_map = {t["staff_id"]: t for t in targets_res.data}
+
+            campaigns_res = supabase_staff.table("fb_campaigns").select("*").execute()
+            campaign_breakdown, campaign_totals = calc_campaign_fb(apo_rows, campaigns_res.data)
 
             results = {}
             for sid, info in master.items():
@@ -324,7 +458,9 @@ def register_staff_routes(app):
                     "rank": info["rank"],
                     "apo_amount": 0,
                     "cxl_amount": 0,
+                    "fb_achievement": 0,
                     "fb_amount": 0,
+                    "fb_breakdown": [],
                     "sales": 0,
                     "work_days": 0,
                     "target_achieve": 0,
@@ -346,7 +482,7 @@ def register_staff_routes(app):
                     results[sid]["cxl_amount"] += row.get("amount", 0)
                 else:
                     results[sid]["apo_amount"] += row.get("amount", 0)
-                results[sid]["fb_amount"] += row.get("fb_amount", 0)
+                results[sid]["fb_achievement"] += row.get("fb_amount", 0)
 
             for row in att_rows:
                 sid = B_TO_D.get(row["staff_id"], row["staff_id"])
@@ -357,6 +493,21 @@ def register_staff_routes(app):
 
             for sid, r in results.items():
                 info = master[sid]
+
+                # FB内訳：達成評価分
+                if r["fb_achievement"] > 0:
+                    r["fb_breakdown"].append({
+                        "name": "達成評価FB",
+                        "category": "達成評価",
+                        "amount": r["fb_achievement"]
+                    })
+
+                # FB内訳：キャンペーン分
+                for entry in campaign_breakdown.get(sid, []):
+                    r["fb_breakdown"].append(entry)
+
+                campaign_total = campaign_totals.get(sid, 0)
+                r["fb_amount"] = r["fb_achievement"] + campaign_total
                 r["sales"] = r["apo_amount"] - r["cxl_amount"] + r["fb_amount"]
 
                 tgt = targets_map.get(sid)
