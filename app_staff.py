@@ -197,20 +197,124 @@ def register_staff_routes(app):
             import traceback
             return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+    @app.route("/staff/target", methods=["GET", "POST"])
+    @jwt_required
+    def staff_target():
+        if request.method == "GET":
+            try:
+                staff_id = request.args.get("staff_id")
+                month = request.args.get("month")
+                if not staff_id or not month:
+                    return jsonify({"error": "staff_id, monthが必要です"}), 400
+
+                if request.role != "admin" and staff_id != request.staff_id:
+                    return jsonify({"error": "権限がありません"}), 403
+
+                target_month = month + "-01"
+                res = supabase_staff.table("monthly_targets")\
+                    .select("*").eq("staff_id", staff_id).eq("target_month", target_month).execute()
+
+                if res.data:
+                    return jsonify({"status": "ok", "data": res.data[0]})
+                else:
+                    return jsonify({"status": "ok", "data": {
+                        "staff_id": staff_id, "target_month": target_month,
+                        "planned_work_days": 0, "is_confirmed": False, "confirmed_work_days": None
+                    }})
+            except Exception as e:
+                import traceback
+                return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+        else:
+            try:
+                data = request.get_json()
+                staff_id = data.get("staff_id")
+                month = data.get("month")
+                planned_work_days = data.get("planned_work_days")
+
+                if not staff_id or not month:
+                    return jsonify({"error": "staff_id, monthが必要です"}), 400
+
+                if request.role != "admin" and staff_id != request.staff_id:
+                    return jsonify({"error": "権限がありません"}), 403
+
+                target_month = month + "-01"
+
+                if request.role != "admin":
+                    existing = supabase_staff.table("monthly_targets")\
+                        .select("is_confirmed").eq("staff_id", staff_id).eq("target_month", target_month).execute()
+                    if existing.data and existing.data[0]["is_confirmed"]:
+                        return jsonify({"error": "確定済みのため編集できません"}), 403
+
+                supabase_staff.table("monthly_targets").upsert({
+                    "staff_id": staff_id,
+                    "target_month": target_month,
+                    "planned_work_days": int(planned_work_days)
+                }, on_conflict="staff_id,target_month").execute()
+
+                return jsonify({"status": "ok"})
+            except Exception as e:
+                import traceback
+                return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+    @app.route("/staff/confirm_month", methods=["POST"])
+    @admin_required
+    def confirm_month():
+        try:
+            data = request.get_json()
+            month = data.get("month")
+            if not month:
+                return jsonify({"error": "monthが必要です"}), 400
+
+            target_month = month + "-01"
+            master = load_staff_master()
+
+            att_res = supabase_staff.table("attendance")\
+                .select("*").eq("target_month", target_month).execute()
+
+            work_days_map = {}
+            for row in att_res.data:
+                sid = B_TO_D.get(row["staff_id"], row["staff_id"])
+                if (row.get("work_hours") or 0) > 0:
+                    work_days_map[sid] = work_days_map.get(sid, 0) + 1
+
+            for sid in master.keys():
+                days = work_days_map.get(sid, 0)
+                supabase_staff.table("monthly_targets").upsert({
+                    "staff_id": sid,
+                    "target_month": target_month,
+                    "is_confirmed": True,
+                    "confirmed_work_days": days
+                }, on_conflict="staff_id,target_month").execute()
+
+            return jsonify({"status": "ok", "message": f"{month}を確定しました"})
+        except Exception as e:
+            import traceback
+            return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
     @app.route("/staff/summary")
     def staff_summary():
         try:
             month = request.args.get("month")
             if not month:
                 return jsonify({"error": "monthパラメータが必要です"}), 400
+
             target_month = month + "-01"
             master = load_staff_master()
+
             apo_res = supabase_staff.table("appointments")\
                 .select("*").eq("target_month", target_month).execute()
             apo_rows = apo_res.data
+
             att_res = supabase_staff.table("attendance")\
                 .select("*").eq("target_month", target_month).execute()
             att_rows = att_res.data
+
+            # 出勤予定/確定データ取得
+            targets_res = supabase_staff.table("monthly_targets")\
+                .select("*").eq("target_month", target_month).execute()
+            targets_map = {t["staff_id"]: t for t in targets_res.data}
+
             results = {}
             for sid, info in master.items():
                 results[sid] = {
@@ -228,8 +332,11 @@ def register_staff_routes(app):
                     "achieve_rate": None,
                     "is_monthly": info["monthly_salary"] is not None,
                     "hourly_wage": info["hourly_wage"],
-                    "monthly_salary": info["monthly_salary"]
+                    "monthly_salary": info["monthly_salary"],
+                    "planned_work_days": 0,
+                    "is_confirmed": False
                 }
+
             for row in apo_rows:
                 sid = B_TO_D.get(row["staff_id"], row["staff_id"])
                 if sid not in results:
@@ -240,15 +347,30 @@ def register_staff_routes(app):
                 else:
                     results[sid]["apo_amount"] += row.get("amount", 0)
                 results[sid]["fb_amount"] += row.get("fb_amount", 0)
+
             for row in att_rows:
                 sid = B_TO_D.get(row["staff_id"], row["staff_id"])
                 if sid not in results:
                     continue
                 if (row.get("work_hours") or 0) > 0:
                     results[sid]["work_days"] += 1
+
             for sid, r in results.items():
                 info = master[sid]
                 r["sales"] = r["apo_amount"] - r["cxl_amount"] + r["fb_amount"]
+
+                tgt = targets_map.get(sid)
+                is_confirmed = tgt["is_confirmed"] if tgt else False
+                r["is_confirmed"] = is_confirmed
+                r["planned_work_days"] = tgt["planned_work_days"] if tgt else 0
+
+                if is_confirmed:
+                    calc_days = tgt.get("confirmed_work_days")
+                    if calc_days is None:
+                        calc_days = r["work_days"]
+                else:
+                    calc_days = tgt["planned_work_days"] if (tgt and tgt["planned_work_days"] > 0) else r["work_days"]
+
                 if info["monthly_salary"] is not None:
                     base = info["monthly_salary"] * 1.15 + 20000
                     r["target_achieve"] = int(base / 0.40)
@@ -259,15 +381,18 @@ def register_staff_routes(app):
                     wage = info["hourly_wage"]
                     mgmt = info["mgmt_fee"]
                     pattern = info["work_pattern"]
-                    days = r["work_days"]
+                    days = calc_days
                     rate_row = RATE_TABLE.get(pattern, {}).get(days)
                     if rate_row:
                         base = wage * 8 + 1000 + mgmt
                         r["target_achieve"] = int(base * days * rate_row[0])
                         r["target_maintain"] = int(base * days * rate_row[1])
+
                 if r["target_achieve"] > 0:
                     r["achieve_rate"] = round(r["sales"] / r["target_achieve"] * 100, 1)
+
             return jsonify({"status": "ok", "data": list(results.values())})
+
         except Exception as e:
             import traceback
             return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
