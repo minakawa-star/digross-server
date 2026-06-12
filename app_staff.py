@@ -43,14 +43,13 @@ RATE_TABLE = {
         7: (2.95, 2.57), 6: (2.95, 2.57), 5: (2.95, 2.57)},
 }
 
-# インセンティブ用：休み日数→比重テーブル
+# インセンティブ用：休み日数→売上比重テーブル
 INCENTIVE_RATE_TABLE = [
     (1, 2.30),   # 休み0-1日 → 週5
     (4, 2.45),   # 休み2-4日 → 週4
     (8, 2.60),   # 休み5-8日 → 週3
     (12, 2.75),  # 休み9-12日 → 週2
 ]
-INCENTIVE_SOCIAL_INSURANCE = 3150
 
 
 def load_staff_master():
@@ -513,6 +512,7 @@ def register_staff_routes(app):
                     "staff_id": sid,
                     "target_month": target_month,
                     "base_salary": r.get("base_salary") or 0,
+                    "overtime_allowance": r.get("overtime_allowance") or 0,
                     "commute_allowance": r.get("commute_allowance") or 0
                 })
 
@@ -574,7 +574,11 @@ def register_staff_routes(app):
             prior_payroll_map = {}
             for row in prior_payroll_res.data:
                 sid = B_TO_D.get(row["staff_id"], row["staff_id"])
-                prior_payroll_map[sid] = row.get("commute_allowance") or 0
+                prior_payroll_map[sid] = {
+                    "base_salary": row.get("base_salary") or 0,
+                    "overtime_allowance": row.get("overtime_allowance") or 0,
+                    "commute_allowance": row.get("commute_allowance") or 0
+                }
 
             holidays_res = supabase_staff.table("holidays").select("holiday_date").execute()
             holidays_set = {h["holiday_date"] for h in holidays_res.data}
@@ -681,6 +685,7 @@ def register_staff_routes(app):
                     r["achieve_rate"] = round(r["sales"] / r["target_achieve"] * 100, 1)
 
                 # ---- インセンティブ目標 ----
+                # ロジック: (基本給 + 残業手当 + 非課税通勤手当) × 売上比重
                 if info["monthly_salary"] is not None:
                     r["incentive_status"] = "対象外（月給制）"
                 else:
@@ -697,12 +702,17 @@ def register_staff_routes(app):
                                 rate = rate_val
                                 break
 
+                        payroll = prior_payroll_map.get(sid)
+
                         if rate is None:
                             r["incentive_status"] = "対象外（出勤実績不足）"
+                        elif payroll is None:
+                            r["incentive_status"] = "対象外（給与データ未登録）"
                         else:
-                            commute = prior_payroll_map.get(sid, 0)
-                            daily_target = (wage * 8 + INCENTIVE_SOCIAL_INSURANCE + commute) * rate
-                            incentive_target = int(daily_target * prior_work_days)
+                            payroll_total = (payroll["base_salary"]
+                                              + payroll["overtime_allowance"]
+                                              + payroll["commute_allowance"])
+                            incentive_target = int(payroll_total * rate)
 
                             r["incentive_target"] = incentive_target
                             r["incentive_status"] = "ok"
@@ -712,8 +722,10 @@ def register_staff_routes(app):
                                 "prior_business_days": prior_business_days,
                                 "rest_days": rest_days,
                                 "rate": rate,
-                                "commute_allowance": commute,
-                                "daily_target": int(daily_target)
+                                "base_salary": payroll["base_salary"],
+                                "overtime_allowance": payroll["overtime_allowance"],
+                                "commute_allowance": payroll["commute_allowance"],
+                                "payroll_total": payroll_total
                             }
 
             return jsonify({"status": "ok", "data": list(results.values())})
